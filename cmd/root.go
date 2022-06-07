@@ -17,6 +17,7 @@ limitations under the License.
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"github.com/spf13/cobra"
 	"io"
@@ -29,17 +30,8 @@ import (
 const ClientHandshakeFmt = "C%1d%05d%05d"
 const ServerHandshakeFmt = "A%1d%05d%05d"
 const ACKFmt = "A%1d"
-
-func resendLoop(conn *net.UDPConn, timeoutMs int, dataChan chan []byte, gotAck *Event) {
-	for dgram := range dataChan {
-		// send and keep resending
-		for !gotAck.IsSet() {
-			conn.Write(dgram)
-			time.Sleep(time.Duration(timeoutMs) * time.Millisecond)
-		}
-		gotAck.UnSet()
-	}
-}
+const DATAFmt = "D%1d"
+const EOFFmt = "E%1d"
 
 func sendLoop(conn *net.UDPConn, timeoutMs int, dgramSize int, fileIn *os.File) int {
 	seq := 0
@@ -60,27 +52,60 @@ func sendLoop(conn *net.UDPConn, timeoutMs int, dgramSize int, fileIn *os.File) 
 	// send + ack loop
 	chunk := make([]byte, actualSize-2)
 	dgram := make([]byte, actualSize)
-
-	sendChan := make(chan []byte)
-	gotAck := NewEvent()
-	go resendLoop(conn, timeoutMs, sendChan, gotAck)
+	ack := make([]byte, 2)
+	var ackSeq int
+	reachedEOF := false
 
 	for {
 		// read from file
 		actualRead, err := fileIn.Read(chunk)
-		if (err == io.EOF) || (actualRead == 0) {
-			break
-		} else if err != nil {
+		reachedEOF = errors.Is(err, io.EOF) || (actualRead == 0)
+
+		if !reachedEOF && (err != nil) {
 			fmt.Fprintf(os.Stderr, "Error reading from source file: %s\n", err)
 			os.Exit(1)
 		}
 
-		copy(dgram, fmt.Sprintf("D%1d", seq))
-		copy(dgram[2:], chunk[:actualRead])
+		// increment seq if sending a chunk
+		seq = (seq + 1) % 2
 
-		sendChan <- dgram[:actualRead+2]
+		// handle EOF
+		if reachedEOF {
+			copy(dgram, fmt.Sprintf(EOFFmt, seq))
+			actualRead = 0
+		} else {
+			copy(dgram, fmt.Sprintf(DATAFmt, seq))
+			copy(dgram[2:], chunk[:actualRead])
+		}
 
-		// TODO: wait for ack
+		// send chunk or EOF
+		for {
+			conn.Write(dgram[:actualRead+2])
+			conn.SetReadDeadline(time.Now().Add(time.Duration(actualTimeout) * time.Millisecond))
+			_, err := conn.Read(ack)
+			if err != nil {
+				if errors.Is(err, os.ErrDeadlineExceeded) {
+					// timed out, resend chunk
+					continue
+				} else {
+					fmt.Fprintf(os.Stderr, "Could not send file chunk! Error: %s", err)
+					os.Exit(1)
+				}
+			}
+
+			// parse ack
+			fmt.Sscanf(string(ack), ACKFmt, &ackSeq)
+
+			if ackSeq == seq {
+				// correct ack, move on to next chunk
+				break
+			}
+		}
+
+		if reachedEOF {
+			// sent EOF and got ack for EOF
+			break
+		}
 	}
 
 	return seq
