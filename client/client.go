@@ -111,6 +111,7 @@ func (client *Client) SendFile(filePath string) {
 	}(fp)
 
 	// send + ack loop
+	fileSent := 0
 	totalSent := 0
 	chunk := make([]byte, client.dgramSize-2)
 	dgram := make([]byte, client.dgramSize)
@@ -118,6 +119,7 @@ func (client *Client) SendFile(filePath string) {
 	var ackSeq uint8
 	reachedEOF := false
 
+	ti := time.Now()
 	for {
 		// read from file
 		actualRead, err := fp.Read(chunk)
@@ -146,6 +148,8 @@ func (client *Client) SendFile(filePath string) {
 			_ = client.conn.SetReadDeadline(
 				time.Now().Add(time.Duration(client.timeoutMs) * time.Millisecond),
 			)
+			totalSent += actualRead + 2
+
 			_, err := client.conn.Read(ack)
 			if err != nil {
 				if errors.Is(err, os.ErrDeadlineExceeded) {
@@ -162,7 +166,7 @@ func (client *Client) SendFile(filePath string) {
 
 			if ackSeq == client.seq {
 				// correct ack, move on to next chunk
-				totalSent += actualRead
+				fileSent += actualRead
 				break
 			}
 		}
@@ -172,7 +176,12 @@ func (client *Client) SendFile(filePath string) {
 			break
 		}
 	}
-	_, _ = fmt.Printf("Succesfully sent file %s (%d bytes)!\n", filePath, totalSent)
+	dt := time.Now().Sub(ti).Seconds()
+	rate := float64(totalSent) / dt
+
+	_, _ = fmt.Printf("Succesfully sent file %s (%d bytes)!\n", filePath, fileSent)
+	_, _ = fmt.Printf("Actual bytes sent: %d bytes\n", totalSent)
+	_, _ = fmt.Printf("Data transfer rate: %.03f MBps\n", rate/10e3)
 }
 
 func (client *Client) ReceiveFile(outPath string) {
