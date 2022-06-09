@@ -91,6 +91,13 @@ func Connect(addr *net.UDPAddr, timeoutMs uint32, dgramSize uint32) *Client {
 	}
 }
 
+func (client *Client) Close() {
+	err := client.conn.Close()
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "Encountered error while attempting to close socket; silently ignoring...")
+	}
+}
+
 // SendFile sends a file to the connected server
 func (client *Client) SendFile(filePath string) {
 	_, _ = fmt.Printf("Sending file %s\n", filePath)
@@ -104,6 +111,7 @@ func (client *Client) SendFile(filePath string) {
 	}(fp)
 
 	// send + ack loop
+	totalSent := 0
 	chunk := make([]byte, client.dgramSize-2)
 	dgram := make([]byte, client.dgramSize)
 	ack := make([]byte, 2)
@@ -154,6 +162,7 @@ func (client *Client) SendFile(filePath string) {
 
 			if ackSeq == client.seq {
 				// correct ack, move on to next chunk
+				totalSent += actualRead
 				break
 			}
 		}
@@ -163,5 +172,9 @@ func (client *Client) SendFile(filePath string) {
 			break
 		}
 	}
-	_, _ = fmt.Printf("Succesfully sent file %s!\n", filePath)
+	_, _ = fmt.Printf("Succesfully sent file %s (%d bytes)!\n", filePath, totalSent)
+}
+
+func (client *Client) ReceiveFile(outPath string) {
+	// TODO
 }

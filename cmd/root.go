@@ -52,6 +52,7 @@ var rootCmd = &cobra.Command{
 		}
 
 		c := client.Connect(udpAddr, uint32(timeoutMs), uint32(dgramSize))
+		defer c.Close()
 		c.SendFile(fileIn)
 	},
 }
