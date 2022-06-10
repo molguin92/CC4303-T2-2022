@@ -36,7 +36,7 @@ var rootCmd = &cobra.Command{
 		timeoutMs, _ := strconv.ParseUint(args[0], 10, 32)
 		dgramSize, _ := strconv.ParseUint(args[1], 10, 32)
 		fileIn := args[2]
-		//fileOut := args[3]
+		fileOut := args[3]
 
 		address := args[4]
 		port, _ := strconv.Atoi(args[5])
@@ -54,6 +54,7 @@ var rootCmd = &cobra.Command{
 		c := client.Connect(udpAddr, uint32(timeoutMs), uint32(dgramSize))
 		defer c.Close()
 		c.SendFile(fileIn)
+		c.ReceiveFile(fileOut)
 	},
 }
 

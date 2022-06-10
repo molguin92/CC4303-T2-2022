@@ -58,6 +58,7 @@ func Connect(addr *net.UDPAddr, timeoutMs uint32, dgramSize uint32) *Client {
 		panic(err)
 	}
 	_, _ = fmt.Fprintln(os.Stdout, "Connection successful, attempting handshake...")
+	_, _ = fmt.Printf("Suggested timeout: %d ms | Suggested datagram size: %d bytes\n", timeoutMs, dgramSize)
 
 	// "connected"
 	// execute handshake
@@ -80,12 +81,13 @@ func Connect(addr *net.UDPAddr, timeoutMs uint32, dgramSize uint32) *Client {
 		_, _ = fmt.Fprintf(os.Stderr, "Local seq: %d\nServer seq: %d\n", seq, serverSeq)
 		panic(serverSeq)
 	}
-	_, _ = fmt.Fprintln(os.Stdout, "Handshake succesful!")
+	_, _ = fmt.Fprintln(os.Stdout, "Handshake successful!")
+	_, _ = fmt.Printf("Actual timeout: %d ms | Actual datagram size: %d bytes\n", actualTimeout, actualSize)
 
 	// build the client and return
 	return &Client{
 		conn:      conn,
-		seq:       (seq + 1) % 2,
+		seq:       seq,
 		timeoutMs: actualTimeout,
 		dgramSize: actualSize,
 	}
@@ -112,12 +114,20 @@ func (client *Client) SendFile(filePath string) {
 
 	// send + ack loop
 	fileSent := 0
-	totalSent := 0
+	//totalSent := 0
 	chunk := make([]byte, client.dgramSize-2)
 	dgram := make([]byte, client.dgramSize)
 	ack := make([]byte, 2)
 	var ackSeq uint8
 	reachedEOF := false
+
+	// file size for progress
+	fi, err := fp.Stat()
+	if err != nil {
+		panic(err)
+	}
+	fileSize := fi.Size()
+	_, _ = fmt.Printf("\rSent 0/%d bytes", fileSize)
 
 	ti := time.Now()
 	for {
@@ -148,7 +158,8 @@ func (client *Client) SendFile(filePath string) {
 			_ = client.conn.SetReadDeadline(
 				time.Now().Add(time.Duration(client.timeoutMs) * time.Millisecond),
 			)
-			totalSent += actualRead + 2
+
+			//totalSent += actualRead + 2
 
 			_, err := client.conn.Read(ack)
 			if err != nil {
@@ -162,28 +173,150 @@ func (client *Client) SendFile(filePath string) {
 			}
 
 			// parse ack
-			parseMessage(string(ack), ackFmt, &ackSeq)
+			_, err = fmt.Sscanf(string(ack), ackFmt, &ackSeq)
+			if err != nil {
+				// could not parse ack, discard
+				continue
+			}
 
 			if ackSeq == client.seq {
 				// correct ack, move on to next chunk
 				fileSent += actualRead
+				// report progress!
+				_, _ = fmt.Printf("\rSent %d/%d bytes", fileSent, fileSize)
 				break
 			}
 		}
 
 		if reachedEOF {
 			// sent EOF and got ack for EOF
+			_, _ = fmt.Println()
 			break
 		}
 	}
 	dt := time.Now().Sub(ti).Seconds()
-	rate := float64(totalSent) / dt
+	rate := float64(fileSent) / dt
 
-	_, _ = fmt.Printf("Succesfully sent file %s (%d bytes)!\n", filePath, fileSent)
-	_, _ = fmt.Printf("Actual bytes sent: %d bytes\n", totalSent)
-	_, _ = fmt.Printf("Data transfer rate: %.03f MBps\n", rate/10e3)
+	// reset conn deadline
+	_ = client.conn.SetReadDeadline(time.Time{})
+
+	_, _ = fmt.Printf("Succesfully sent file %s!\n", filePath)
+	_, _ = fmt.Printf("Sent %d bytes in %.03f seconds (%.03f MBps)\n", fileSent, dt, rate/10e3)
 }
 
 func (client *Client) ReceiveFile(outPath string) {
-	// TODO
+	_, _ = fmt.Println("Receiving data from remote...")
+	_, _ = fmt.Printf("Writing output to %s\n", outPath)
+
+	// open file for writing
+	fp, err := os.Create(outPath)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Could not open file %s for writing!\n", outPath)
+		panic(err)
+	}
+	defer func(fp *os.File) {
+		_ = fp.Close()
+	}(fp)
+
+	// preallocate space for data
+	dgram := make([]byte, client.dgramSize)
+	var serverSeq uint8
+
+	// prepare acks for sending
+	// reset client seq
+	client.seq = 0
+	prevAck := []byte(fmt.Sprintf(ackFmt, 1))
+	ack := []byte(fmt.Sprintf(ackFmt, client.seq))
+
+	fileRead := 0
+	//totalRead := 0
+	_, _ = fmt.Printf("\rReceived %d bytes", fileRead)
+
+	ti := time.Now()
+	for {
+		// set timeout!
+		_ = client.conn.SetReadDeadline(
+			time.Now().Add(time.Duration(client.timeoutMs) * time.Millisecond),
+		)
+
+		// receive a chunk
+		received, err := client.conn.Read(dgram)
+		if err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				// timed out waiting for chunk, resend previous ACK
+				writeToConn(client.conn, prevAck)
+				continue
+			} else {
+				_, _ = fmt.Fprintln(os.Stderr, "Could not read from socket!")
+				panic(err)
+			}
+		}
+
+		// got a dgram, parse header to make sure it actually is data
+		_, err = fmt.Sscanf(string(dgram[:2]), dataFmt, &serverSeq)
+		fmt.Println(string(dgram[:2]))
+		if err != nil {
+			// could not parse header
+			// it could be an EOF header
+			_, err = fmt.Sscanf(string(dgram[:2]), eofFmt, &serverSeq)
+			if err != nil {
+				// could not parse, probably stray ack
+				// ignore
+				continue
+			} else if serverSeq != client.seq {
+				// EOF and received seq doesn't match expected seq
+				// resend ACK and retry
+				writeToConn(client.conn, prevAck)
+				continue
+			} else {
+				// EOF and correct server seq
+				// send ACK then break the loop and exit
+				writeToConn(client.conn, ack)
+				//totalRead += received
+				client.seq = (client.seq + 1) % 2
+				break
+			}
+		}
+
+		// it's data, but is it the sequence we expected??
+		if serverSeq != client.seq {
+			// not the correct seq, resend previous ack
+			writeToConn(client.conn, prevAck)
+			continue
+		}
+
+		// correct seq!
+		// save data, then ack and update local seqs and acks
+		_, err = fp.Write(dgram[2:received])
+		if err != nil {
+			_, _ = fmt.Fprintf(
+				os.Stderr,
+				"Could not write data chunk (%d bytes) to file!",
+				received-2,
+			)
+			panic(err)
+		}
+
+		writeToConn(client.conn, ack)
+
+		//totalRead += received
+		fileRead += received - 2
+		// progress!
+		_, _ = fmt.Printf("\rReceived %d bytes", fileRead)
+
+		// update seq and acks
+		client.seq = (client.seq + 1) % 2
+
+		copy(prevAck, ack)
+		copy(ack, fmt.Sprintf(ackFmt, client.seq))
+	}
+	dt := time.Now().Sub(ti).Seconds()
+	rate := float64(fileRead) / dt
+
+	// reset conn deadline
+	_ = client.conn.SetReadDeadline(time.Time{})
+
+	//_, _ = fmt.Printf("Succesfully received %d bytes of data into %s!\n", fileRead, outPath)
+	_, _ = fmt.Printf("\nRead %d bytes in %.03f seconds (%.03f MBps)\n", fileRead, dt, rate/10e3)
+
 }
