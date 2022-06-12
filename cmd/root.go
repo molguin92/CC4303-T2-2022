@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"time"
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -54,11 +55,11 @@ var rootCmd = &cobra.Command{
 			panic(err)
 		}
 		defer c.Close()
-		_, err = c.SendFile(fileIn)
+		_, err = c.SendFile(fileIn, func(size int, rtt time.Duration) {})
 		if err != nil {
 			panic(err)
 		}
-		_, err = c.ReceiveFile(fileOut)
+		_, err = c.ReceiveFile(fileOut, func(size int, rtt time.Duration) {})
 		if err != nil {
 			panic(err)
 		}

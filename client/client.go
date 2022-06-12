@@ -110,7 +110,7 @@ func (client *Client) Close() {
 }
 
 // SendFile sends a file to the connected server
-func (client *Client) SendFile(filePath string) (int, error) {
+func (client *Client) SendFile(filePath string, rttCallback func(int, time.Duration)) (int, error) {
 	_, _ = fmt.Fprintf(os.Stderr, "Sending file %s\n", filePath)
 	fp, err := os.Open(filePath)
 	if err != nil {
@@ -160,6 +160,7 @@ func (client *Client) SendFile(filePath string) (int, error) {
 		}
 
 		// send chunk or EOF
+		tSend := time.Now()
 		for {
 			client.tries++
 			if client.tries > client.maxTries {
@@ -200,6 +201,7 @@ func (client *Client) SendFile(filePath string) (int, error) {
 				break
 			}
 		}
+		rttCallback(actualRead+2, time.Now().Sub(tSend))
 
 		if reachedEOF {
 			// sent EOF and got ack for EOF
@@ -218,7 +220,7 @@ func (client *Client) SendFile(filePath string) (int, error) {
 	return fileSent, nil
 }
 
-func (client *Client) ReceiveFile(outPath string) (int, error) {
+func (client *Client) ReceiveFile(outPath string, rttCallback func(int, time.Duration)) (int, error) {
 	_, _ = fmt.Fprintf(os.Stderr, "Receiving data and writing it to %s\n", outPath)
 
 	// open file for writing
@@ -245,6 +247,8 @@ func (client *Client) ReceiveFile(outPath string) (int, error) {
 	_, _ = fmt.Fprintf(os.Stderr, "\rReceived %d bytes", fileRead)
 
 	ti := time.Now()
+	tSend := time.Now()
+
 	for {
 		// set timeout!
 		_ = client.conn.SetReadDeadline(
@@ -308,12 +312,15 @@ func (client *Client) ReceiveFile(outPath string) (int, error) {
 		}
 
 		// correct seq!
+		rttCallback(received, time.Now().Sub(tSend))
+
 		// save data, then ack and update local seqs and acks
 		_, err = fp.Write(dgram[2:received])
 		if err != nil {
 			return fileRead, err
 		}
 
+		tSend = time.Now()
 		_, err = client.conn.Write(ack)
 		if err != nil {
 			return fileRead, err
