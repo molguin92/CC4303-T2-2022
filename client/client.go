@@ -20,77 +20,86 @@ type Client struct {
 	timeoutMs uint32
 	dgramSize uint32
 	seq       uint8
-}
-
-func writeToConn(conn net.Conn, data []byte) int {
-	written, err := conn.Write(data)
-	if err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "Could not write data to socket!")
-		panic(err)
-	}
-	return written
-}
-
-func readFromConn(conn net.Conn, recvBuf []byte) int {
-	read, err := conn.Read(recvBuf)
-	if err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "Could not read from socket!")
-		panic(err)
-	}
-	return read
-}
-
-func parseMessage(msg string, formatStr string, vars ...any) {
-	_, err := fmt.Sscanf(msg, formatStr, vars...)
-	if err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "Could not parse message!")
-		_, _ = fmt.Fprintf(os.Stderr, "Message: %s\n", msg)
-		panic(err)
-	}
+	tries     uint8
+	maxTries  uint8
 }
 
 // Connect a client to the server, execute the proper handshake, then return the client.
-func Connect(addr *net.UDPAddr, timeoutMs uint32, dgramSize uint32) *Client {
-	_, _ = fmt.Fprintf(os.Stdout, "Connecting to server %s\n", addr)
+func Connect(addr *net.UDPAddr, timeoutMs uint32, dgramSize uint32, maxRetries uint8) (*Client, error) {
+	// TODO: maximum retries!
+
+	_, _ = fmt.Fprintf(
+		os.Stderr,
+		"Connecting to server %s (timeout %d ms, datagram size %d bytes)\n",
+		addr,
+		timeoutMs,
+		dgramSize,
+	)
+
 	conn, err := net.DialUDP("udp4", nil, addr)
 	if err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "Could not connect!")
-		panic(err)
+		return nil, err
 	}
-	_, _ = fmt.Fprintln(os.Stdout, "Connection successful, attempting handshake...")
-	_, _ = fmt.Printf("Suggested timeout: %d ms | Suggested datagram size: %d bytes\n", timeoutMs, dgramSize)
 
 	// "connected"
 	// execute handshake
 	var seq uint8 = 0
-
-	msg := []byte(fmt.Sprintf(handshakeFmt, seq, dgramSize, timeoutMs))
-	_ = writeToConn(conn, msg)
-
-	respBuf := make([]byte, len(msg))
-	_ = readFromConn(conn, respBuf)
-
-	// parse the response
 	var actualSize uint32
 	var actualTimeout uint32
 	var serverSeq uint8
+	var i uint8
 
-	parseMessage(string(respBuf), respHandshakeFmt, &serverSeq, &actualSize, &actualTimeout)
-	if serverSeq != seq {
-		_, _ = fmt.Fprintln(os.Stderr, "Seq mismatch!")
-		_, _ = fmt.Fprintf(os.Stderr, "Local seq: %d\nServer seq: %d\n", seq, serverSeq)
-		panic(serverSeq)
-	}
-	_, _ = fmt.Fprintln(os.Stdout, "Handshake successful!")
-	_, _ = fmt.Printf("Actual timeout: %d ms | Actual datagram size: %d bytes\n", actualTimeout, actualSize)
+	msg := []byte(fmt.Sprintf(handshakeFmt, seq, dgramSize, timeoutMs))
 
-	// build the client and return
-	return &Client{
-		conn:      conn,
-		seq:       seq,
-		timeoutMs: actualTimeout,
-		dgramSize: actualSize,
+	for i = 0; i < maxRetries; i++ {
+		_, err = conn.Write(msg)
+		if err != nil {
+			return nil, err
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(time.Duration(timeoutMs) * time.Millisecond))
+
+		respBuf := make([]byte, len(msg))
+		_, err := conn.Read(respBuf)
+		if err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				// deadline, retry handshake
+				continue
+			} else {
+				return nil, err
+			}
+		}
+
+		// parse the response
+		_, err = fmt.Sscanf(string(respBuf), respHandshakeFmt, &serverSeq, &actualSize, &actualTimeout)
+		if err != nil {
+			return nil, err
+		} else if serverSeq != seq {
+			return nil, fmt.Errorf(
+				"sequence number mismatch during handshake. Expected: %d; received: %d", seq, serverSeq,
+			)
+		}
+		//_, _ = fmt.Fprintln(os.Stdout, "Handshake successful!")
+		//_, _ = fmt.Printf("Actual timeout: %d ms | Actual datagram size: %d bytes\n", actualTimeout, actualSize)
+		_, _ = fmt.Fprintf(
+			os.Stderr,
+			"Set actual timeout to %d ms; actual datagram size to %d bytes\n",
+			actualTimeout,
+			actualSize,
+		)
+
+		// build the client and return
+		return &Client{
+			conn:      conn,
+			seq:       seq,
+			timeoutMs: actualTimeout,
+			dgramSize: actualSize,
+			tries:     0,
+			maxTries:  maxRetries,
+		}, nil
 	}
+
+	return nil, fmt.Errorf("too many retries (%d)", i)
 }
 
 func (client *Client) Close() {
@@ -101,12 +110,11 @@ func (client *Client) Close() {
 }
 
 // SendFile sends a file to the connected server
-func (client *Client) SendFile(filePath string) {
-	_, _ = fmt.Printf("Sending file %s\n", filePath)
+func (client *Client) SendFile(filePath string) (int, error) {
+	_, _ = fmt.Fprintf(os.Stderr, "Sending file %s\n", filePath)
 	fp, err := os.Open(filePath)
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Could not open file %s\n", filePath)
-		panic(err)
+		return 0, err
 	}
 	defer func(fp *os.File) {
 		_ = fp.Close()
@@ -124,10 +132,10 @@ func (client *Client) SendFile(filePath string) {
 	// file size for progress
 	fi, err := fp.Stat()
 	if err != nil {
-		panic(err)
+		return 0, err
 	}
 	fileSize := fi.Size()
-	_, _ = fmt.Printf("\rSent 0/%d bytes", fileSize)
+	_, _ = fmt.Fprintf(os.Stderr, "\rSent 0/%d bytes", fileSize)
 
 	ti := time.Now()
 	for {
@@ -136,8 +144,7 @@ func (client *Client) SendFile(filePath string) {
 		reachedEOF = errors.Is(err, io.EOF) || (actualRead == 0)
 
 		if !reachedEOF && (err != nil) {
-			_, _ = fmt.Fprintf(os.Stderr, "Error reading from source file: %s\n", err)
-			panic(err)
+			return fileSent, err
 		}
 
 		// increment seq if sending a chunk
@@ -154,12 +161,18 @@ func (client *Client) SendFile(filePath string) {
 
 		// send chunk or EOF
 		for {
-			writeToConn(client.conn, dgram[:actualRead+2])
+			client.tries++
+			if client.tries > client.maxTries {
+				return fileSent, fmt.Errorf("too many retries (%d)", client.tries)
+			}
+
+			_, err = client.conn.Write(dgram[:actualRead+2])
+			if err != nil {
+				return fileSent, err
+			}
 			_ = client.conn.SetReadDeadline(
 				time.Now().Add(time.Duration(client.timeoutMs) * time.Millisecond),
 			)
-
-			//totalSent += actualRead + 2
 
 			_, err := client.conn.Read(ack)
 			if err != nil {
@@ -167,8 +180,7 @@ func (client *Client) SendFile(filePath string) {
 					// timed out, resend chunk
 					continue
 				} else {
-					_, _ = fmt.Fprintln(os.Stderr, "Could not send file chunk!")
-					panic(err)
+					return fileSent, err
 				}
 			}
 
@@ -182,8 +194,9 @@ func (client *Client) SendFile(filePath string) {
 			if ackSeq == client.seq {
 				// correct ack, move on to next chunk
 				fileSent += actualRead
+				client.tries = 0
 				// report progress!
-				_, _ = fmt.Printf("\rSent %d/%d bytes", fileSent, fileSize)
+				_, _ = fmt.Fprintf(os.Stderr, "\rSent %d/%d bytes", fileSent, fileSize)
 				break
 			}
 		}
@@ -200,19 +213,18 @@ func (client *Client) SendFile(filePath string) {
 	// reset conn deadline
 	_ = client.conn.SetReadDeadline(time.Time{})
 
-	_, _ = fmt.Printf("Succesfully sent file %s!\n", filePath)
-	_, _ = fmt.Printf("Sent %d bytes in %.03f seconds (%.03f MBps)\n", fileSent, dt, rate/10e3)
+	_, _ = fmt.Fprintf(os.Stderr, "File %s successfully sent!\n", filePath)
+	_, _ = fmt.Fprintf(os.Stderr, "Sent %d bytes in %.03f seconds (%.03f MBps)\n", fileSent, dt, rate/10e3)
+	return fileSent, nil
 }
 
-func (client *Client) ReceiveFile(outPath string) {
-	_, _ = fmt.Println("Receiving data from remote...")
-	_, _ = fmt.Printf("Writing output to %s\n", outPath)
+func (client *Client) ReceiveFile(outPath string) (int, error) {
+	_, _ = fmt.Fprintf(os.Stderr, "Receiving data and writing it to %s\n", outPath)
 
 	// open file for writing
 	fp, err := os.Create(outPath)
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Could not open file %s for writing!\n", outPath)
-		panic(err)
+		return 0, err
 	}
 	defer func(fp *os.File) {
 		_ = fp.Close()
@@ -230,7 +242,7 @@ func (client *Client) ReceiveFile(outPath string) {
 
 	fileRead := 0
 	//totalRead := 0
-	_, _ = fmt.Printf("\rReceived %d bytes", fileRead)
+	_, _ = fmt.Fprintf(os.Stderr, "\rReceived %d bytes", fileRead)
 
 	ti := time.Now()
 	for {
@@ -244,17 +256,18 @@ func (client *Client) ReceiveFile(outPath string) {
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
 				// timed out waiting for chunk, resend previous ACK
-				writeToConn(client.conn, prevAck)
+				_, err = client.conn.Write(prevAck)
+				if err != nil {
+					return fileRead, err
+				}
 				continue
 			} else {
-				_, _ = fmt.Fprintln(os.Stderr, "Could not read from socket!")
-				panic(err)
+				return fileRead, err
 			}
 		}
 
 		// got a dgram, parse header to make sure it actually is data
 		_, err = fmt.Sscanf(string(dgram[:2]), dataFmt, &serverSeq)
-		fmt.Println(string(dgram[:2]))
 		if err != nil {
 			// could not parse header
 			// it could be an EOF header
@@ -266,12 +279,18 @@ func (client *Client) ReceiveFile(outPath string) {
 			} else if serverSeq != client.seq {
 				// EOF and received seq doesn't match expected seq
 				// resend ACK and retry
-				writeToConn(client.conn, prevAck)
+				_, err = client.conn.Write(prevAck)
+				if err != nil {
+					return fileRead, err
+				}
 				continue
 			} else {
 				// EOF and correct server seq
 				// send ACK then break the loop and exit
-				writeToConn(client.conn, ack)
+				_, err = client.conn.Write(ack)
+				if err != nil {
+					return fileRead, err
+				}
 				//totalRead += received
 				client.seq = (client.seq + 1) % 2
 				break
@@ -281,7 +300,10 @@ func (client *Client) ReceiveFile(outPath string) {
 		// it's data, but is it the sequence we expected??
 		if serverSeq != client.seq {
 			// not the correct seq, resend previous ack
-			writeToConn(client.conn, prevAck)
+			_, err = client.conn.Write(prevAck)
+			if err != nil {
+				return fileRead, err
+			}
 			continue
 		}
 
@@ -289,20 +311,18 @@ func (client *Client) ReceiveFile(outPath string) {
 		// save data, then ack and update local seqs and acks
 		_, err = fp.Write(dgram[2:received])
 		if err != nil {
-			_, _ = fmt.Fprintf(
-				os.Stderr,
-				"Could not write data chunk (%d bytes) to file!",
-				received-2,
-			)
-			panic(err)
+			return fileRead, err
 		}
 
-		writeToConn(client.conn, ack)
+		_, err = client.conn.Write(ack)
+		if err != nil {
+			return fileRead, err
+		}
 
 		//totalRead += received
 		fileRead += received - 2
 		// progress!
-		_, _ = fmt.Printf("\rReceived %d bytes", fileRead)
+		_, _ = fmt.Fprintf(os.Stderr, "\rReceived %d bytes", fileRead)
 
 		// update seq and acks
 		client.seq = (client.seq + 1) % 2
@@ -316,7 +336,6 @@ func (client *Client) ReceiveFile(outPath string) {
 	// reset conn deadline
 	_ = client.conn.SetReadDeadline(time.Time{})
 
-	//_, _ = fmt.Printf("Succesfully received %d bytes of data into %s!\n", fileRead, outPath)
-	_, _ = fmt.Printf("\nRead %d bytes in %.03f seconds (%.03f MBps)\n", fileRead, dt, rate/10e3)
-
+	_, _ = fmt.Fprintf(os.Stderr, "\nRead %d bytes in %.03f seconds (%.03f MBps)\n", fileRead, dt, rate/10e3)
+	return fileRead, nil
 }

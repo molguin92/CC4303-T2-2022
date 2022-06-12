@@ -45,16 +45,23 @@ var rootCmd = &cobra.Command{
 		// open socket
 		//conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", address, port))
 		udpAddr, err := net.ResolveUDPAddr("udp", fullAddress)
-
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Could not resolve address %s\n", fullAddress)
-			os.Exit(1)
+			panic(err)
 		}
 
-		c := client.Connect(udpAddr, uint32(timeoutMs), uint32(dgramSize))
+		c, err := client.Connect(udpAddr, uint32(timeoutMs), uint32(dgramSize), 10)
+		if err != nil {
+			panic(err)
+		}
 		defer c.Close()
-		c.SendFile(fileIn)
-		c.ReceiveFile(fileOut)
+		_, err = c.SendFile(fileIn)
+		if err != nil {
+			panic(err)
+		}
+		_, err = c.ReceiveFile(fileOut)
+		if err != nil {
+			panic(err)
+		}
 	},
 }
 
