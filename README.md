@@ -27,4 +27,29 @@ Se recomienda seguir las siguientes instrucciones _dentro_ de la máquina virtua
       go version go1.18.3 linux/amd64
       ```
 2. Ya instalado `go`, puede fácilmente obtener y compilar el código en este repositorio.
-   1. Para descargar el código: `go get github.com/molguin92/CC4303-T2-2022`
+   1. Para descargar, compilar, e instalar el código: `go install -tags netgo github.com/molguin92/CC4303-T2-2022@latest`.
+      Fíjese bien en la opción `-tags netgo`; es necesaria para que su código corra sin problemas dentro de Kathará.
+   2. El binario compilado quedará en `~/go/bin/`, y el código fuente en `~/go/pkg/`.
+   3. Si desea modificar el código, puede volver a compilarlo usando `go build -tags netgo github.com/molguin92/CC4303-T2-2022`.
+
+## Utilizar el Cliente
+
+Puede obtener instrucciones simples de cómo utilizar el cliente especificando la opción `--help` al ejecutar el binario:
+
+```bash
+$ ~/go/bin/CC4303-T2-2022 --help
+Usage:
+  CC4303-T2-2022 TIMEOUT_MS DATAGRAM_SIZE_BYTES INPUT_FILE OUTPUT_FILE HOST PORT [flags]
+
+Flags:
+  -h, --help          help for CC4303-T2-2022
+  -r, --record-rtts   Record RTTs; samples will be output as CSV files ./recvRTTs.csv and ./sendRTTs.csv in the current directory.
+```
+
+El cliente sigue la misma interfaz especificada en el enunciado de la Tarea 2, con una opción adicional.
+Si al invocar el ejecutable usted además agrega la opción `-r` (o `--record-rtts`), el cliente escribirá dos archivos CSV en la actual carpeta con los RTTs de envío y recepción, los cuales puede utilizar para responder las preguntas de la T3.
+
+## Licencia de Uso
+
+Copyright 2022 Manuel Olguín Muñoz.
+El código está licenciado bajo una licencia Apache v2, ver [LICENSE](LICENSE) para más detalles.
