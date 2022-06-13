@@ -42,8 +42,6 @@ type Client struct {
 
 // Connect a client to the server, execute the proper handshake, then return the client.
 func Connect(addr *net.UDPAddr, timeoutMs uint32, dgramSize uint32, maxRetries uint8) (*Client, error) {
-	// TODO: maximum retries!
-
 	_, _ = fmt.Fprintf(
 		os.Stderr,
 		"Connecting to server %s (timeout %d ms, datagram size %d bytes)\n",

@@ -62,16 +62,29 @@ var rootCmd = &cobra.Command{
 		defer c.Close()
 
 		// "connected", start the CSV writing threads
-		var sendChan chan [2]string
-		var recvChan chan [2]string
-
 		var sendCallback func(int, time.Duration)
 		var recvCallback func(int, time.Duration)
 
 		if RecordRTTs {
+			_, _ = fmt.Fprintf(os.Stderr,
+				"Writing RTTs to %s and %s\n",
+				SendRTTFile,
+				RecvRTTFile,
+			)
+
 			// start writing threads
-			sendChan = client.StartWriterThread(SendRTTFile)
-			recvChan = client.StartWriterThread(RecvRTTFile)
+			sendChan := client.StartWriterThread(SendRTTFile)
+			recvChan := client.StartWriterThread(RecvRTTFile)
+
+			defer func() {
+				_, _ = fmt.Fprintf(os.Stderr,
+					"RTT records have been output to %s and %s\n",
+					SendRTTFile,
+					RecvRTTFile,
+				)
+				close(sendChan)
+				close(recvChan)
+			}()
 
 			sendChan <- RTTHeader
 			recvChan <- RTTHeader
@@ -85,9 +98,6 @@ var rootCmd = &cobra.Command{
 			}
 
 		} else {
-			sendChan = make(chan [2]string)
-			recvChan = make(chan [2]string)
-
 			sendCallback = func(i int, duration time.Duration) {
 				// no-op
 			}
@@ -95,9 +105,6 @@ var rootCmd = &cobra.Command{
 				// no-op
 			}
 		}
-
-		defer close(sendChan)
-		defer close(recvChan)
 
 		_, err = c.SendFile(fileIn, sendCallback)
 		if err != nil {
@@ -126,5 +133,10 @@ func init() {
 		"record-rtts",
 		"r",
 		false,
-		"Record RTTs; samples will be output as CSV files in the current directory.")
+		fmt.Sprintf(
+			"Record RTTs; samples will be output as CSV files %s and %s in the current directory.",
+			RecvRTTFile,
+			SendRTTFile,
+		),
+	)
 }
