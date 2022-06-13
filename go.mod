@@ -1,4 +1,4 @@
-module CC4303_T2_2022
+module github.com/molguin92/CC4303-T2-2022
 
 go 1.18
 

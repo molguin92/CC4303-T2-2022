@@ -17,8 +17,8 @@ limitations under the License.
 package cmd
 
 import (
-	"CC4303_T2_2022/client"
 	"fmt"
+	"github.com/molguin92/CC4303-T2-2022/client"
 	"github.com/spf13/cobra"
 	"net"
 	"os"
@@ -35,7 +35,7 @@ var RTTHeader = [2]string{"size_bytes", "rtt_seconds"}
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "CC4303_T2_2022 TIMEOUT_MS DATAGRAM_SIZE_BYTES INPUT_FILE OUTPUT_FILE HOST PORT",
+	Use:   "CC4303-T2-2022 TIMEOUT_MS DATAGRAM_SIZE_BYTES INPUT_FILE OUTPUT_FILE HOST PORT",
 	Short: "",
 	Long:  "",
 	Args:  cobra.ExactArgs(6),

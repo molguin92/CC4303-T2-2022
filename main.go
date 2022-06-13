@@ -15,7 +15,7 @@ limitations under the License.
 */
 package main
 
-import "CC4303_T2_2022/cmd"
+import "github.com/molguin92/CC4303-T2-2022/cmd"
 
 func main() {
 	cmd.Execute()
