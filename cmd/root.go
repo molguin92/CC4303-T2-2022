@@ -26,9 +26,16 @@ import (
 	"time"
 )
 
+var RecordRTTs bool
+
+const SendRTTFile = "./sendRTTs.csv"
+const RecvRTTFile = "./recvRTTs.csv"
+
+var RTTHeader = [2]string{"size_bytes", "rtt_seconds"}
+
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "CC4303_T2_2022",
+	Use:   "CC4303_T2_2022 TIMEOUT_MS DATAGRAM_SIZE_BYTES INPUT_FILE OUTPUT_FILE HOST PORT",
 	Short: "",
 	Long:  "",
 	Args:  cobra.ExactArgs(6),
@@ -43,8 +50,6 @@ var rootCmd = &cobra.Command{
 		port, _ := strconv.Atoi(args[5])
 		fullAddress := fmt.Sprintf("%s:%d", address, port)
 
-		// open socket
-		//conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", address, port))
 		udpAddr, err := net.ResolveUDPAddr("udp", fullAddress)
 		if err != nil {
 			panic(err)
@@ -55,11 +60,51 @@ var rootCmd = &cobra.Command{
 			panic(err)
 		}
 		defer c.Close()
-		_, err = c.SendFile(fileIn, func(size int, rtt time.Duration) {})
+
+		// "connected", start the CSV writing threads
+		var sendChan chan [2]string
+		var recvChan chan [2]string
+
+		var sendCallback func(int, time.Duration)
+		var recvCallback func(int, time.Duration)
+
+		if RecordRTTs {
+			// start writing threads
+			sendChan = client.StartWriterThread(SendRTTFile)
+			recvChan = client.StartWriterThread(RecvRTTFile)
+
+			sendChan <- RTTHeader
+			recvChan <- RTTHeader
+
+			sendCallback = func(size int, rtt time.Duration) {
+				sendChan <- [2]string{fmt.Sprintf("%d", size), fmt.Sprintf("%f", rtt.Seconds())}
+			}
+
+			recvCallback = func(size int, rtt time.Duration) {
+				recvChan <- [2]string{fmt.Sprintf("%d", size), fmt.Sprintf("%f", rtt.Seconds())}
+			}
+
+		} else {
+			sendChan = make(chan [2]string)
+			recvChan = make(chan [2]string)
+
+			sendCallback = func(i int, duration time.Duration) {
+				// no-op
+			}
+			recvCallback = func(i int, duration time.Duration) {
+				// no-op
+			}
+		}
+
+		defer close(sendChan)
+		defer close(recvChan)
+
+		_, err = c.SendFile(fileIn, sendCallback)
 		if err != nil {
 			panic(err)
 		}
-		_, err = c.ReceiveFile(fileOut, func(size int, rtt time.Duration) {})
+
+		_, err = c.ReceiveFile(fileOut, recvCallback)
 		if err != nil {
 			panic(err)
 		}
@@ -75,4 +120,11 @@ func Execute() {
 	}
 }
 
-func init() {}
+func init() {
+	rootCmd.PersistentFlags().BoolVarP(
+		&RecordRTTs,
+		"record-rtts",
+		"r",
+		false,
+		"Record RTTs; samples will be output as CSV files in the current directory.")
+}
