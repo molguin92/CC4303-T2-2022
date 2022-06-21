@@ -44,10 +44,12 @@ Usage:
 Flags:
   -h, --help          help for CC4303-T2-2022
   -r, --record-rtts   Record RTTs; samples will be output as CSV files ./recvRTTs.csv and ./sendRTTs.csv in the current directory.
+  -s, --record-stats   Record stats for total time, dropped packets, and dropped ACKS. Will be stored as a JSON file ./stats.json in the current directory.
 ```
 
 El cliente sigue la misma interfaz especificada en el enunciado de la Tarea 2, con una opción adicional.
 Si al invocar el ejecutable usted además agrega la opción `-r` (o `--record-rtts`), el cliente escribirá dos archivos CSV en la actual carpeta con los RTTs de envío y recepción, los cuales puede utilizar para responder las preguntas de la T3.
+Si agrega la opción `-s` (`--record-stats`), el cliente creará un archivo `stats.json` con información sobre el tiempo total que tomó enviar y recibir el archivo (en segundos), y sobre la cantidad de paquetes/ACKS perdidos.
 
 ## Licencia de Uso
 
