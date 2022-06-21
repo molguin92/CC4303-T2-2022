@@ -17,6 +17,7 @@ limitations under the License.
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/molguin92/CC4303-T2-2022/client"
 	"github.com/spf13/cobra"
@@ -27,11 +28,19 @@ import (
 )
 
 var RecordRTTs bool
+var RecordStats bool
 
 const SendRTTFile = "./sendRTTs.csv"
 const RecvRTTFile = "./recvRTTs.csv"
+const StatsFile = "./stats.json"
 
 var RTTHeader = [2]string{"size_bytes", "rtt_seconds"}
+
+type ClientStats struct {
+	TimeSeconds    float64 `json:"TimeSeconds"`
+	DroppedPackets int64   `json:"DroppedPackets"`
+	DroppedAcks    int64   `json:"DroppedAcks"`
+}
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -106,14 +115,41 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
-		_, err = c.SendFile(fileIn, sendCallback)
+		ti := time.Now()
+		_, droppedChunks, err := c.SendFile(fileIn, sendCallback)
 		if err != nil {
 			panic(err)
 		}
 
-		_, err = c.ReceiveFile(fileOut, recvCallback)
+		_, droppedAcks, err := c.ReceiveFile(fileOut, recvCallback)
 		if err != nil {
 			panic(err)
+		}
+		dt := time.Now().Sub(ti)
+
+		_, _ = fmt.Fprintf(os.Stderr, "Dropped %d chunks and %d acks.\n", droppedChunks, droppedAcks)
+		_, _ = fmt.Fprintf(os.Stderr, "Total time: %s\n", dt)
+
+		if RecordStats {
+			fp, err := os.Create(StatsFile)
+			if err != nil {
+				panic(err)
+			}
+			defer func(fp *os.File) {
+				_ = fp.Close()
+			}(fp)
+
+			stats := ClientStats{
+				TimeSeconds:    dt.Seconds(),
+				DroppedPackets: int64(droppedChunks),
+				DroppedAcks:    int64(droppedAcks),
+			}
+			statsB, err := json.Marshal(stats)
+			if err != nil {
+				panic(err)
+			}
+			_, _ = fmt.Fprintf(fp, "%s\n", statsB)
+			_, _ = fmt.Fprintf(os.Stderr, "Stats have been output to %s\n", StatsFile)
 		}
 	},
 }
@@ -137,6 +173,18 @@ func init() {
 			"Record RTTs; samples will be output as CSV files %s and %s in the current directory.",
 			RecvRTTFile,
 			SendRTTFile,
+		),
+	)
+
+	rootCmd.PersistentFlags().BoolVarP(
+		&RecordStats,
+		"record-stats",
+		"s",
+		false,
+		fmt.Sprintf(
+			"Record stats for total time, dropped packets, and dropped ACKS. "+
+				"Will be stored as a JSON file %s in the current directory.",
+			StatsFile,
 		),
 	)
 }

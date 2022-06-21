@@ -124,11 +124,11 @@ func (client *Client) Close() {
 }
 
 // SendFile sends a file to the connected server
-func (client *Client) SendFile(filePath string, rttCallback func(int, time.Duration)) (int, error) {
+func (client *Client) SendFile(filePath string, rttCallback func(int, time.Duration)) (int, int, error) {
 	_, _ = fmt.Fprintf(os.Stderr, "Sending file %s\n", filePath)
 	fp, err := os.Open(filePath)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	defer func(fp *os.File) {
 		_ = fp.Close()
@@ -146,10 +146,21 @@ func (client *Client) SendFile(filePath string, rttCallback func(int, time.Durat
 	// file size for progress
 	fi, err := fp.Stat()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	fileSize := fi.Size()
 	_, _ = fmt.Fprintf(os.Stderr, "\rSent 0/%d bytes", fileSize)
+
+	sentChunks := 0
+	recvAcks := 0
+	calcDropped := func() int {
+		dropped := sentChunks - recvAcks
+		if dropped > 0 {
+			return dropped
+		} else {
+			return 0
+		}
+	}
 
 	ti := time.Now()
 	for {
@@ -158,7 +169,7 @@ func (client *Client) SendFile(filePath string, rttCallback func(int, time.Durat
 		reachedEOF = errors.Is(err, io.EOF) || (actualRead == 0)
 
 		if !reachedEOF && (err != nil) {
-			return fileSent, err
+			return fileSent, calcDropped(), err
 		}
 
 		// increment seq if sending a chunk
@@ -178,13 +189,15 @@ func (client *Client) SendFile(filePath string, rttCallback func(int, time.Durat
 		for {
 			client.tries++
 			if client.tries > client.maxTries {
-				return fileSent, fmt.Errorf("too many retries (%d)", client.tries)
+				return fileSent, calcDropped(), fmt.Errorf("too many retries (%d)", client.tries)
 			}
 
 			_, err = client.conn.Write(dgram[:actualRead+2])
 			if err != nil {
-				return fileSent, err
+				return fileSent, calcDropped(), err
 			}
+			sentChunks++
+
 			_ = client.conn.SetReadDeadline(
 				time.Now().Add(time.Duration(client.timeoutMs) * time.Millisecond),
 			)
@@ -195,7 +208,7 @@ func (client *Client) SendFile(filePath string, rttCallback func(int, time.Durat
 					// timed out, resend chunk
 					continue
 				} else {
-					return fileSent, err
+					return fileSent, calcDropped(), err
 				}
 			}
 
@@ -205,6 +218,8 @@ func (client *Client) SendFile(filePath string, rttCallback func(int, time.Durat
 				// could not parse ack, discard
 				continue
 			}
+			// got ack
+			recvAcks++
 
 			if ackSeq == client.seq {
 				// correct ack, move on to next chunk
@@ -231,16 +246,16 @@ func (client *Client) SendFile(filePath string, rttCallback func(int, time.Durat
 
 	_, _ = fmt.Fprintf(os.Stderr, "File %s successfully sent!\n", filePath)
 	_, _ = fmt.Fprintf(os.Stderr, "Sent %d bytes in %.03f seconds (%.03f MBps)\n", fileSent, dt, rate/10e3)
-	return fileSent, nil
+	return fileSent, calcDropped(), nil
 }
 
-func (client *Client) ReceiveFile(outPath string, rttCallback func(int, time.Duration)) (int, error) {
+func (client *Client) ReceiveFile(outPath string, rttCallback func(int, time.Duration)) (int, int, error) {
 	_, _ = fmt.Fprintf(os.Stderr, "Receiving data and writing it to %s\n", outPath)
 
 	// open file for writing
 	fp, err := os.Create(outPath)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	defer func(fp *os.File) {
 		_ = fp.Close()
@@ -260,6 +275,17 @@ func (client *Client) ReceiveFile(outPath string, rttCallback func(int, time.Dur
 	//totalRead := 0
 	_, _ = fmt.Fprintf(os.Stderr, "\rReceived %d bytes", fileRead)
 
+	acksSent := 0
+	chunksReceived := 0
+	calcDropped := func() int {
+		dropped := acksSent - chunksReceived
+		if dropped > 0 {
+			return dropped
+		} else {
+			return 0
+		}
+	}
+
 	ti := time.Now()
 	tSend := time.Now()
 
@@ -276,11 +302,12 @@ func (client *Client) ReceiveFile(outPath string, rttCallback func(int, time.Dur
 				// timed out waiting for chunk, resend previous ACK
 				_, err = client.conn.Write(prevAck)
 				if err != nil {
-					return fileRead, err
+					return fileRead, calcDropped(), err
 				}
+				acksSent++
 				continue
 			} else {
-				return fileRead, err
+				return fileRead, calcDropped(), err
 			}
 		}
 
@@ -299,16 +326,19 @@ func (client *Client) ReceiveFile(outPath string, rttCallback func(int, time.Dur
 				// resend ACK and retry
 				_, err = client.conn.Write(prevAck)
 				if err != nil {
-					return fileRead, err
+					return fileRead, calcDropped(), err
 				}
+				acksSent++
 				continue
 			} else {
 				// EOF and correct server seq
 				// send ACK then break the loop and exit
+				chunksReceived++
 				_, err = client.conn.Write(ack)
 				if err != nil {
-					return fileRead, err
+					return fileRead, calcDropped(), err
 				}
+				acksSent++
 				//totalRead += received
 				client.seq = (client.seq + 1) % 2
 				break
@@ -320,25 +350,28 @@ func (client *Client) ReceiveFile(outPath string, rttCallback func(int, time.Dur
 			// not the correct seq, resend previous ack
 			_, err = client.conn.Write(prevAck)
 			if err != nil {
-				return fileRead, err
+				return fileRead, calcDropped(), err
 			}
+			acksSent++
 			continue
 		}
 
 		// correct seq!
+		chunksReceived++
 		rttCallback(received, time.Now().Sub(tSend))
 
 		// save data, then ack and update local seqs and acks
 		_, err = fp.Write(dgram[2:received])
 		if err != nil {
-			return fileRead, err
+			return fileRead, calcDropped(), err
 		}
 
 		tSend = time.Now()
 		_, err = client.conn.Write(ack)
 		if err != nil {
-			return fileRead, err
+			return fileRead, calcDropped(), err
 		}
+		acksSent++
 
 		//totalRead += received
 		fileRead += received - 2
@@ -358,5 +391,5 @@ func (client *Client) ReceiveFile(outPath string, rttCallback func(int, time.Dur
 	_ = client.conn.SetReadDeadline(time.Time{})
 
 	_, _ = fmt.Fprintf(os.Stderr, "\nRead %d bytes in %.03f seconds (%.03f MBps)\n", fileRead, dt, rate/10e3)
-	return fileRead, nil
+	return fileRead, calcDropped(), nil
 }
