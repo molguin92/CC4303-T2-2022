@@ -24,6 +24,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -82,8 +83,9 @@ var rootCmd = &cobra.Command{
 			)
 
 			// start writing threads
-			sendChan := client.StartWriterThread(SendRTTFile)
-			recvChan := client.StartWriterThread(RecvRTTFile)
+			var waitGroup sync.WaitGroup
+			sendChan := client.StartWriterThread(SendRTTFile, &waitGroup)
+			recvChan := client.StartWriterThread(RecvRTTFile, &waitGroup)
 
 			defer func() {
 				_, _ = fmt.Fprintf(os.Stderr,
@@ -93,6 +95,7 @@ var rootCmd = &cobra.Command{
 				)
 				close(sendChan)
 				close(recvChan)
+				waitGroup.Wait()
 			}()
 
 			sendChan <- RTTHeader

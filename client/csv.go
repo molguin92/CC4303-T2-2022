@@ -19,16 +19,20 @@ package client
 import (
 	"encoding/csv"
 	"os"
+	"sync"
 )
 
-func StartWriterThread(filePath string) chan [2]string {
+func StartWriterThread(filePath string, waitGroup *sync.WaitGroup) chan [2]string {
 	// open the channel and start the goroutine
 	ioChan := make(chan [2]string)
-	go writeLoop(ioChan, filePath)
+	go writeLoop(ioChan, filePath, waitGroup)
+	waitGroup.Add(1)
 	return ioChan
 }
 
-func writeLoop(ioChan chan [2]string, filePath string) {
+func writeLoop(ioChan chan [2]string, filePath string, waitGroup *sync.WaitGroup) {
+	defer waitGroup.Done()
+
 	fp, err := os.Create(filePath)
 	if err != nil {
 		panic(err)
