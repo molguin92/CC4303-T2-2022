@@ -27,7 +27,7 @@ Se recomienda seguir las siguientes instrucciones _dentro_ de la máquina virtua
       go version go1.18.3 linux/amd64
       ```
 2. Ya instalado `go`, puede fácilmente obtener y compilar el código en este repositorio.
-   1. Para descargar, compilar, e instalar el código: `go install -tags netgo github.com/molguin92/CC4303-T2-2022@v1.0.3`.
+   1. Para descargar, compilar, e instalar el código: `go install -tags netgo github.com/molguin92/CC4303-T2-2022@v1.0.4`.
       Fíjese bien en la opción `-tags netgo`; es necesaria para que su código corra sin problemas dentro de Kathará.
    2. El binario compilado quedará en `~/go/bin/`, y el código fuente en `~/go/pkg/`.
    3. Si desea modificar el código, puede volver a compilarlo usando `go build -tags netgo github.com/molguin92/CC4303-T2-2022`.
